@@ -43,9 +43,19 @@ st.caption("Valuaciones Quálitas  |  Sube uno o varios PDFs")
 def get_ot(filename: str) -> str:
     return os.path.splitext(filename)[0]
 
+def es_no_parte(token: str) -> bool:
+    """Acepta cualquier NO.PARTE excepto decimales puros (que son UT de pintura/MOB)."""
+    return not re.match(r'^\d+\.\d+$', token)
+
 def extract_refacciones(pdf_bytes: bytes, ot: str) -> list[dict]:
+    """
+    Recorta la mitad izquierda del PDF para aislar REFACCIONES.
+    El NO.PARTE es el último token antes del $ MONTO — puede ser
+    numérico (2000), alfanumérico (BCKN-50-711B) o con letras (260602191R).
+    """
     partidas = []
-    patron = re.compile(r'^(.+?)\s+(\d{3,6})\s+\$\s*([\d,]+\.\d{2})\s*$')
+    # Captura: descripción + NO.PARTE (cualquier token sin espacios) + $ monto
+    patron = re.compile(r'^(.+?)\s+(\S+)\s+\$\s*([\d,]+\.\d{2})\s*$')
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
@@ -76,7 +86,7 @@ def extract_refacciones(pdf_bytes: bytes, ot: str) -> list[dict]:
                     continue
 
                 m = patron.match(ls)
-                if m and re.match(r'^\d+$', m.group(2)):
+                if m and es_no_parte(m.group(2)):
                     partidas.append({
                         "OT": ot,
                         "DESCRIPCION": m.group(1).strip(),
@@ -131,9 +141,7 @@ def build_excel(all_rows: list[dict]) -> bytes:
 
             for col in range(1, 5):
                 c = ws.cell(current_row, col)
-                c.fill = fill
-                c.font = fnt
-                c.border = borde
+                c.fill = fill; c.font = fnt; c.border = borde
 
             ws.cell(current_row, 1).value = row["OT"]
             ws.cell(current_row, 1).alignment = Alignment(horizontal="center", vertical="center")
@@ -191,6 +199,8 @@ def build_excel(all_rows: list[dict]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+# ── UI ────────────────────────────────────────────────────────────────────────
 
 uploaded_files = st.file_uploader(
     "Sube uno o más PDFs de valuación Quálitas",
