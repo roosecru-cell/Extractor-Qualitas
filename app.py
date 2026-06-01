@@ -257,4 +257,4 @@ else:
     st.info("👆 Sube los PDFs de valuación para comenzar.")
 
 st.markdown("---")
-st.caption("Sistema CV SIETE · Extractor Refacciones Quálitas")
+st.caption("Extractor Refacciones Quálitas")
