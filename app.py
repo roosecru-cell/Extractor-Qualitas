@@ -37,8 +37,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🔧 Extractor de Refacciones")
-st.caption("Valuaciones Quálitas → Excel  |  Sube uno o varios PDFs")
+st.title("🔧 Extractor de Refacciones Qualitas")
+st.caption("Valuaciones Quálitas  |  Sube uno o varios PDFs")
 
 def get_ot(filename: str) -> str:
     return os.path.splitext(filename)[0]
