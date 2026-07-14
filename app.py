@@ -46,116 +46,128 @@ def get_ot(filename: str) -> str:
     return os.path.splitext(filename)[0]
 
 def es_no_parte_refaccion(token: str) -> bool:
-    """NO.PARTE de refacción: entero o alfanumérico. Rechaza decimales (UT)."""
     return not re.match(r'^\d+\.\d+$', token)
 
-# ── Extracción ────────────────────────────────────────────────────────────────
+def parse_lines(lines, seccion_inicial=None):
+    """
+    Parsea líneas de texto y retorna partidas.
+    seccion_inicial: si la columna no tiene encabezado de sección,
+                     usa este valor como sección por defecto.
+    """
+    pat_refac = re.compile(r'^(.+?)\s+(\S+)\s+\$\s*([\d,]+\.\d{2})\s*$')
+    pat_ut    = re.compile(r'^(.+?)\s+(\d+\.\d+)\s+\$\s*([\d,]+\.\d{2})\s*$')
+    pat_tpp   = re.compile(r'^(.+?)\s+TPP\s+(\d+\.\d+)\s+\$\s*([\d,]+\.\d{2})\s*$')
+
+    partidas = []
+    seccion = seccion_inicial
+
+    for line in lines:
+        ls = line.strip()
+        if not ls:
+            continue
+
+        # Detectar encabezados de sección
+        if re.match(r'^REFACCIONES\b', ls):
+            seccion = "REFACCIONES"; continue
+        if re.match(r'^PINTURA\b', ls):
+            seccion = "PINTURA"; continue
+        if re.match(r'^MANO DE OBRA\b', ls, re.IGNORECASE):
+            seccion = "HOJALATERIA"; continue
+
+        if seccion is None:
+            continue
+
+        # Saltar líneas de totales/encabezados
+        if re.search(
+            r'DESCRIPCION|NO\. PARTE|^Subtotal|^IVA|^Total\b|No Efectivo|^UT\s|R E S U M E N|SUMA TOTAL|DEDUCIBLE|DEMÉRITO',
+            ls, re.IGNORECASE
+        ):
+            continue
+
+        if seccion == "REFACCIONES":
+            m = pat_refac.match(ls)
+            if m and es_no_parte_refaccion(m.group(2)):
+                partidas.append({
+                    "CATEGORIA": "REFACCIONES",
+                    "DESCRIPCION": m.group(1).strip(),
+                    "NO. PARTE / UT": m.group(2),
+                    "MONTO": float(m.group(3).replace(",", "")),
+                })
+        else:
+            # TPP especial
+            m = pat_tpp.match(ls)
+            if m:
+                partidas.append({
+                    "CATEGORIA": seccion,
+                    "DESCRIPCION": m.group(1).strip(),
+                    "NO. PARTE / UT": m.group(2),
+                    "MONTO": float(m.group(3).replace(",", "")),
+                })
+                continue
+            m = pat_ut.match(ls)
+            if m:
+                partidas.append({
+                    "CATEGORIA": seccion,
+                    "DESCRIPCION": m.group(1).strip(),
+                    "NO. PARTE / UT": m.group(2),
+                    "MONTO": float(m.group(3).replace(",", "")),
+                })
+
+    return partidas, seccion
+
 
 def extract_all(pdf_bytes: bytes, ot: str) -> list[dict]:
     """
-    Extrae las tres secciones del PDF:
-      - REFACCIONES  → patrón: DESC  NO_PARTE  $ MONTO
-      - PINTURA      → patrón: DESC  UT_decimal  $ MONTO
-      - MANO DE OBRA → patrón: DESC  UT_decimal  $ MONTO
+    Extrae las tres secciones del PDF manejando el layout de dos columnas.
+    - Columna izquierda: contiene los encabezados de sección y sus datos
+    - Columna derecha: puede contener continuación de la última sección
+      (sin repetir el encabezado)
     """
     partidas = []
 
-    # Patrones
-    pat_refac = re.compile(r'^(.+?)\s+(\S+)\s+\$\s*([\d,]+\.\d{2})\s*$')
-    pat_ut    = re.compile(r'^(.+?)\s+(\d+\.\d+)\s+\$\s*([\d,]+\.\d{2})\s*$')
-    # Pintura con NO.PARTE = TPP (texto) también tiene UT
-    pat_tpp   = re.compile(r'^(.+?)\s+TPP\s+(\d+\.\d+)\s+\$\s*([\d,]+\.\d{2})\s*$')
-
-    SECCIONES = {
-        "REFACCIONES":        "REFACCIONES",
-        "PINTURA":            "PINTURA",
-        "MANO DE OBRA":       "MANO DE OBRA",
-    }
-
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
-            w, h = page.width, page.height
-            left = page.crop((0, 0, w * 0.52, h))
-            text = left.extract_text() or ""
+            pw, ph = page.width, page.height
 
-            seccion_actual = None
+            # ── Columna izquierda ─────────────────────────────────────────
+            left_text  = page.crop((0, 0, pw * 0.50, ph)).extract_text() or ""
+            left_rows, last_seccion = parse_lines(left_text.split("\n"))
+            partidas.extend(left_rows)
 
-            for line in text.split("\n"):
-                ls = line.strip()
-                if not ls:
-                    continue
+            # ── Columna derecha ───────────────────────────────────────────
+            # Puede tener su propio encabezado de sección o ser continuación
+            right_text = page.crop((pw * 0.50, 0, pw, ph)).extract_text() or ""
+            right_lines = right_text.split("\n")
 
-                # ── Detectar cambio de sección ────────────────────────────
-                if re.match(r'^REFACCIONES\b', ls):
-                    seccion_actual = "REFACCIONES"
-                    continue
-                if re.match(r'^PINTURA\b', ls):
-                    seccion_actual = "PINTURA"
-                    continue
-                if re.match(r'^MANO DE OBRA\b', ls, re.IGNORECASE):
-                    seccion_actual = "MANO DE OBRA"
-                    continue
+            # Ver si la columna derecha tiene un encabezado de sección propio
+            tiene_encabezado = any(
+                re.match(r'^(REFACCIONES|PINTURA|MANO DE OBRA)\b', l.strip(), re.IGNORECASE)
+                for l in right_lines
+            )
 
-                if seccion_actual is None:
-                    continue
+            # Si no tiene encabezado propio, heredar la última sección activa
+            seccion_der = None if tiene_encabezado else last_seccion
+            right_rows, _ = parse_lines(right_lines, seccion_inicial=seccion_der)
+            partidas.extend(right_rows)
 
-                # ── Saltar encabezados y totales ──────────────────────────
-                if re.search(
-                    r'DESCRIPCION|NO\. PARTE|Subtotal|IVA|Total|No Efectivo|^UT\s',
-                    ls, re.IGNORECASE
-                ):
-                    continue
+    # Agregar OT y deduplicar (en caso de overlap en el crop)
+    seen = set()
+    result = []
+    for p in partidas:
+        key = (p["CATEGORIA"], p["DESCRIPCION"], p["MONTO"])
+        if key not in seen:
+            seen.add(key)
+            result.append({"OT": ot, **p})
 
-                # ── Parsear según sección ─────────────────────────────────
-                if seccion_actual == "REFACCIONES":
-                    m = pat_refac.match(ls)
-                    if m and es_no_parte_refaccion(m.group(2)):
-                        partidas.append({
-                            "OT": ot,
-                            "CATEGORIA": "REFACCIONES",
-                            "DESCRIPCION": m.group(1).strip(),
-                            "NO. PARTE / UT": m.group(2),
-                            "MONTO": float(m.group(3).replace(",", "")),
-                        })
-
-                elif seccion_actual in ("PINTURA", "MANO DE OBRA"):
-                    # Caso especial: TPP tiene texto + UT
-                    m = pat_tpp.match(ls)
-                    if m:
-                        partidas.append({
-                            "OT": ot,
-                            "CATEGORIA": seccion_actual,
-                            "DESCRIPCION": m.group(1).strip(),
-                            "NO. PARTE / UT": m.group(2),
-                            "MONTO": float(m.group(3).replace(",", "")),
-                        })
-                        continue
-                    # Caso normal: DESC  UT  $ MONTO
-                    m = pat_ut.match(ls)
-                    if m:
-                        partidas.append({
-                            "OT": ot,
-                            "CATEGORIA": seccion_actual,
-                            "DESCRIPCION": m.group(1).strip(),
-                            "NO. PARTE / UT": m.group(2),
-                            "MONTO": float(m.group(3).replace(",", "")),
-                        })
-
-    return partidas
+    return result
 
 
 # ── Excel ─────────────────────────────────────────────────────────────────────
 
-# Colores por categoría
 CAT_COLORS = {
-    "REFACCIONES": "1A3A5C",  # azul oscuro
-    "PINTURA":     "C8392B",  # rojo
-    "MANO DE OBRA":"2E7D32",  # verde oscuro
-}
-CAT_LABEL = {
-    "REFACCIONES": "🔩 REFACCIONES",
-    "PINTURA":     "🎨 PINTURA",
-    "MANO DE OBRA":"🔨 MANO DE OBRA",
+    "REFACCIONES": "1A3A5C",
+    "PINTURA":     "C8392B",
+    "HOJALATERIA":"2E7D32",
 }
 
 def build_excel(all_rows: list[dict]) -> bytes:
@@ -168,21 +180,20 @@ def build_excel(all_rows: list[dict]) -> bytes:
     GRIS_CLARO = "F0F4F8"
     BLANCO     = "FFFFFF"
 
-    thin = Side(style="thin", color="CCCCCC")
+    thin  = Side(style="thin", color="CCCCCC")
     borde = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    # ── Título ────────────────────────────────────────────────────────────
+    # Título
     ws.merge_cells("A1:E1")
     c = ws["A1"]
-    c.value = "VALUACIÓN QUÁLITAS – REFACCIONES / PINTURA / MANO DE OBRA"
+    c.value = "VALUACIÓN QUÁLITAS – REFACCIONES / PINTURA / HOJALATERIA"
     c.font = Font(name="Arial", bold=True, size=13, color=BLANCO)
     c.fill = PatternFill("solid", fgColor=AZUL_OSC)
     c.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    # ── Cabeceras ─────────────────────────────────────────────────────────
-    headers = ["OT", "CATEGORÍA", "DESCRIPCIÓN", "NO. PARTE / UT", "MONTO"]
-    for col, hdr in enumerate(headers, 1):
+    # Cabeceras
+    for col, hdr in enumerate(["OT", "CATEGORÍA", "DESCRIPCIÓN", "NO. PARTE / UT", "MONTO"], 1):
         c = ws.cell(2, col, hdr)
         c.font = Font(name="Arial", bold=True, size=10, color=BLANCO)
         c.fill = PatternFill("solid", fgColor=AZUL_MED)
@@ -190,7 +201,6 @@ def build_excel(all_rows: list[dict]) -> bytes:
         c.border = borde
     ws.row_dimensions[2].height = 20
 
-    # ── Datos agrupados por OT ────────────────────────────────────────────
     sorted_rows = sorted(all_rows, key=lambda r: (r["OT"], r["CATEGORIA"]))
     current_row = 3
     data_start  = 3
@@ -199,7 +209,6 @@ def build_excel(all_rows: list[dict]) -> bytes:
         ot_list  = list(ot_group)
         ot_first = current_row
 
-        # Agrupar por categoría dentro de la OT
         for cat_key, cat_group in groupby(ot_list, key=lambda r: r["CATEGORIA"]):
             cat_list  = list(cat_group)
             cat_first = current_row
@@ -217,7 +226,6 @@ def build_excel(all_rows: list[dict]) -> bytes:
                 ws.cell(current_row, 1).value = row["OT"]
                 ws.cell(current_row, 1).alignment = Alignment(horizontal="center", vertical="center")
 
-                # Categoría con color
                 c2 = ws.cell(current_row, 2)
                 c2.value = row["CATEGORIA"]
                 c2.font  = Font(name="Arial", size=10, bold=True, color=cat_color)
@@ -236,7 +244,7 @@ def build_excel(all_rows: list[dict]) -> bytes:
 
             cat_last = current_row - 1
 
-            # Subtotal por categoría
+            # Subtotal categoría
             ws.merge_cells(f"A{current_row}:D{current_row}")
             sl = ws.cell(current_row, 1)
             sl.value = f"Subtotal {cat_key} — OT {ot_key}"
@@ -256,7 +264,7 @@ def build_excel(all_rows: list[dict]) -> bytes:
 
         ot_last = current_row - 1
 
-        # Total por OT
+        # Total OT
         ws.merge_cells(f"A{current_row}:D{current_row}")
         tl = ws.cell(current_row, 1)
         tl.value = f"TOTAL OT {ot_key}"
@@ -272,9 +280,9 @@ def build_excel(all_rows: list[dict]) -> bytes:
         tv.number_format = '"$"#,##0.00'
         tv.border = borde
         ws.row_dimensions[current_row].height = 22
-        current_row += 2  # espacio entre OTs
+        current_row += 2
 
-    # ── Total general ─────────────────────────────────────────────────────
+    # Total general
     ws.merge_cells(f"A{current_row}:D{current_row}")
     gl = ws.cell(current_row, 1)
     gl.value = "TOTAL GENERAL"
@@ -291,7 +299,6 @@ def build_excel(all_rows: list[dict]) -> bytes:
     gv.border = borde
     ws.row_dimensions[current_row].height = 24
 
-    # ── Anchos ────────────────────────────────────────────────────────────
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 16
     ws.column_dimensions["C"].width = 44
@@ -342,7 +349,6 @@ if uploaded_files:
             excel_bytes = build_excel(all_rows)
             total = sum(r["MONTO"] for r in all_rows)
 
-            # Resumen por categoría
             cats = {}
             for r in all_rows:
                 cats[r["CATEGORIA"]] = cats.get(r["CATEGORIA"], 0) + r["MONTO"]
