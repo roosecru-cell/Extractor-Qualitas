@@ -9,7 +9,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from itertools import groupby
 
 st.set_page_config(
-    page_title="Extractor Refacciones – Quálitas",
+    page_title="Extractor Valuaciones – Quálitas",
     page_icon="🔧",
     layout="centered"
 )
@@ -37,25 +37,40 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🔧 Extractor de Refacciones Qualitas")
-st.caption("Valuaciones Quálitas  |  Sube uno o varios PDFs")
+st.title("🔧 Extractor de Valuaciones Quálitas")
+st.caption("Refacciones · Pintura · Mano de Obra  |  Sube uno o varios PDFs")
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def get_ot(filename: str) -> str:
     return os.path.splitext(filename)[0]
 
-def es_no_parte(token: str) -> bool:
-    """Acepta cualquier NO.PARTE excepto decimales puros (que son UT de pintura/MOB)."""
+def es_no_parte_refaccion(token: str) -> bool:
+    """NO.PARTE de refacción: entero o alfanumérico. Rechaza decimales (UT)."""
     return not re.match(r'^\d+\.\d+$', token)
 
-def extract_refacciones(pdf_bytes: bytes, ot: str) -> list[dict]:
+# ── Extracción ────────────────────────────────────────────────────────────────
+
+def extract_all(pdf_bytes: bytes, ot: str) -> list[dict]:
     """
-    Recorta la mitad izquierda del PDF para aislar REFACCIONES.
-    El NO.PARTE es el último token antes del $ MONTO — puede ser
-    numérico (2000), alfanumérico (BCKN-50-711B) o con letras (260602191R).
+    Extrae las tres secciones del PDF:
+      - REFACCIONES  → patrón: DESC  NO_PARTE  $ MONTO
+      - PINTURA      → patrón: DESC  UT_decimal  $ MONTO
+      - MANO DE OBRA → patrón: DESC  UT_decimal  $ MONTO
     """
     partidas = []
-    # Captura: descripción + NO.PARTE (cualquier token sin espacios) + $ monto
-    patron = re.compile(r'^(.+?)\s+(\S+)\s+\$\s*([\d,]+\.\d{2})\s*$')
+
+    # Patrones
+    pat_refac = re.compile(r'^(.+?)\s+(\S+)\s+\$\s*([\d,]+\.\d{2})\s*$')
+    pat_ut    = re.compile(r'^(.+?)\s+(\d+\.\d+)\s+\$\s*([\d,]+\.\d{2})\s*$')
+    # Pintura con NO.PARTE = TPP (texto) también tiene UT
+    pat_tpp   = re.compile(r'^(.+?)\s+TPP\s+(\d+\.\d+)\s+\$\s*([\d,]+\.\d{2})\s*$')
+
+    SECCIONES = {
+        "REFACCIONES":        "REFACCIONES",
+        "PINTURA":            "PINTURA",
+        "MANO DE OBRA":       "MANO DE OBRA",
+    }
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
@@ -63,62 +78,111 @@ def extract_refacciones(pdf_bytes: bytes, ot: str) -> list[dict]:
             left = page.crop((0, 0, w * 0.52, h))
             text = left.extract_text() or ""
 
-            in_ref = False
+            seccion_actual = None
+
             for line in text.split("\n"):
                 ls = line.strip()
+                if not ls:
+                    continue
 
+                # ── Detectar cambio de sección ────────────────────────────
                 if re.match(r'^REFACCIONES\b', ls):
-                    in_ref = True
+                    seccion_actual = "REFACCIONES"
+                    continue
+                if re.match(r'^PINTURA\b', ls):
+                    seccion_actual = "PINTURA"
+                    continue
+                if re.match(r'^MANO DE OBRA\b', ls, re.IGNORECASE):
+                    seccion_actual = "MANO DE OBRA"
                     continue
 
-                if in_ref and re.match(
-                    r'^(PINTURA|MANO DE OBRA|SUBTOTAL|Subtotal)\b', ls, re.IGNORECASE
-                ):
-                    break
-
-                if not in_ref:
+                if seccion_actual is None:
                     continue
 
+                # ── Saltar encabezados y totales ──────────────────────────
                 if re.search(
-                    r'DESCRIPCION|NO\. PARTE|Subtotal|IVA|Total|No Efectivo',
+                    r'DESCRIPCION|NO\. PARTE|Subtotal|IVA|Total|No Efectivo|^UT\s',
                     ls, re.IGNORECASE
                 ):
                     continue
 
-                m = patron.match(ls)
-                if m and es_no_parte(m.group(2)):
-                    partidas.append({
-                        "OT": ot,
-                        "DESCRIPCION": m.group(1).strip(),
-                        "NO. PARTE": m.group(2),
-                        "MONTO": float(m.group(3).replace(",", "")),
-                    })
+                # ── Parsear según sección ─────────────────────────────────
+                if seccion_actual == "REFACCIONES":
+                    m = pat_refac.match(ls)
+                    if m and es_no_parte_refaccion(m.group(2)):
+                        partidas.append({
+                            "OT": ot,
+                            "CATEGORIA": "REFACCIONES",
+                            "DESCRIPCION": m.group(1).strip(),
+                            "NO. PARTE / UT": m.group(2),
+                            "MONTO": float(m.group(3).replace(",", "")),
+                        })
+
+                elif seccion_actual in ("PINTURA", "MANO DE OBRA"):
+                    # Caso especial: TPP tiene texto + UT
+                    m = pat_tpp.match(ls)
+                    if m:
+                        partidas.append({
+                            "OT": ot,
+                            "CATEGORIA": seccion_actual,
+                            "DESCRIPCION": m.group(1).strip(),
+                            "NO. PARTE / UT": m.group(2),
+                            "MONTO": float(m.group(3).replace(",", "")),
+                        })
+                        continue
+                    # Caso normal: DESC  UT  $ MONTO
+                    m = pat_ut.match(ls)
+                    if m:
+                        partidas.append({
+                            "OT": ot,
+                            "CATEGORIA": seccion_actual,
+                            "DESCRIPCION": m.group(1).strip(),
+                            "NO. PARTE / UT": m.group(2),
+                            "MONTO": float(m.group(3).replace(",", "")),
+                        })
 
     return partidas
+
+
+# ── Excel ─────────────────────────────────────────────────────────────────────
+
+# Colores por categoría
+CAT_COLORS = {
+    "REFACCIONES": "1A3A5C",  # azul oscuro
+    "PINTURA":     "C8392B",  # rojo
+    "MANO DE OBRA":"2E7D32",  # verde oscuro
+}
+CAT_LABEL = {
+    "REFACCIONES": "🔩 REFACCIONES",
+    "PINTURA":     "🎨 PINTURA",
+    "MANO DE OBRA":"🔨 MANO DE OBRA",
+}
 
 def build_excel(all_rows: list[dict]) -> bytes:
     wb = Workbook()
     ws = wb.active
-    ws.title = "Refacciones"
+    ws.title = "Valuación"
 
     AZUL_OSC   = "1A3A5C"
     AZUL_MED   = "2E6DA4"
-    ROJO       = "C8392B"
     GRIS_CLARO = "F0F4F8"
     BLANCO     = "FFFFFF"
 
     thin = Side(style="thin", color="CCCCCC")
     borde = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    ws.merge_cells("A1:D1")
+    # ── Título ────────────────────────────────────────────────────────────
+    ws.merge_cells("A1:E1")
     c = ws["A1"]
-    c.value = "REFACCIONES – VALUACIONES QUÁLITAS"
-    c.font = Font(name="Arial", bold=True, size=14, color=BLANCO)
+    c.value = "VALUACIÓN QUÁLITAS – REFACCIONES / PINTURA / MANO DE OBRA"
+    c.font = Font(name="Arial", bold=True, size=13, color=BLANCO)
     c.fill = PatternFill("solid", fgColor=AZUL_OSC)
     c.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    for col, hdr in enumerate(["OT", "DESCRIPCIÓN", "NO. PARTE", "MONTO"], 1):
+    # ── Cabeceras ─────────────────────────────────────────────────────────
+    headers = ["OT", "CATEGORÍA", "DESCRIPCIÓN", "NO. PARTE / UT", "MONTO"]
+    for col, hdr in enumerate(headers, 1):
         c = ws.cell(2, col, hdr)
         c.font = Font(name="Arial", bold=True, size=10, color=BLANCO)
         c.fill = PatternFill("solid", fgColor=AZUL_MED)
@@ -126,79 +190,119 @@ def build_excel(all_rows: list[dict]) -> bytes:
         c.border = borde
     ws.row_dimensions[2].height = 20
 
-    sorted_rows = sorted(all_rows, key=lambda r: r["OT"])
+    # ── Datos agrupados por OT ────────────────────────────────────────────
+    sorted_rows = sorted(all_rows, key=lambda r: (r["OT"], r["CATEGORIA"]))
     current_row = 3
-    data_start = 3
+    data_start  = 3
 
-    for ot_key, group in groupby(sorted_rows, key=lambda r: r["OT"]):
-        group_list = list(group)
-        first = current_row
+    for ot_key, ot_group in groupby(sorted_rows, key=lambda r: r["OT"]):
+        ot_list  = list(ot_group)
+        ot_first = current_row
 
-        for i, row in enumerate(group_list):
-            bg = BLANCO if i % 2 == 0 else GRIS_CLARO
-            fill = PatternFill("solid", fgColor=bg)
-            fnt = Font(name="Arial", size=10)
+        # Agrupar por categoría dentro de la OT
+        for cat_key, cat_group in groupby(ot_list, key=lambda r: r["CATEGORIA"]):
+            cat_list  = list(cat_group)
+            cat_first = current_row
+            cat_color = CAT_COLORS.get(cat_key, AZUL_MED)
 
-            for col in range(1, 5):
-                c = ws.cell(current_row, col)
-                c.fill = fill; c.font = fnt; c.border = borde
+            for i, row in enumerate(cat_list):
+                bg   = BLANCO if i % 2 == 0 else GRIS_CLARO
+                fill = PatternFill("solid", fgColor=bg)
+                fnt  = Font(name="Arial", size=10)
 
-            ws.cell(current_row, 1).value = row["OT"]
-            ws.cell(current_row, 1).alignment = Alignment(horizontal="center", vertical="center")
-            ws.cell(current_row, 2).value = row["DESCRIPCION"]
-            ws.cell(current_row, 2).alignment = Alignment(vertical="center")
-            ws.cell(current_row, 3).value = row["NO. PARTE"]
-            ws.cell(current_row, 3).alignment = Alignment(horizontal="center", vertical="center")
-            c4 = ws.cell(current_row, 4)
-            c4.value = row["MONTO"]
-            c4.alignment = Alignment(horizontal="right", vertical="center")
-            c4.number_format = '"$"#,##0.00'
+                for col in range(1, 6):
+                    c = ws.cell(current_row, col)
+                    c.fill = fill; c.font = fnt; c.border = borde
+
+                ws.cell(current_row, 1).value = row["OT"]
+                ws.cell(current_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+
+                # Categoría con color
+                c2 = ws.cell(current_row, 2)
+                c2.value = row["CATEGORIA"]
+                c2.font  = Font(name="Arial", size=10, bold=True, color=cat_color)
+                c2.alignment = Alignment(horizontal="center", vertical="center")
+
+                ws.cell(current_row, 3).value = row["DESCRIPCION"]
+                ws.cell(current_row, 3).alignment = Alignment(vertical="center")
+                ws.cell(current_row, 4).value = row["NO. PARTE / UT"]
+                ws.cell(current_row, 4).alignment = Alignment(horizontal="center", vertical="center")
+
+                c5 = ws.cell(current_row, 5)
+                c5.value = row["MONTO"]
+                c5.alignment = Alignment(horizontal="right", vertical="center")
+                c5.number_format = '"$"#,##0.00'
+                current_row += 1
+
+            cat_last = current_row - 1
+
+            # Subtotal por categoría
+            ws.merge_cells(f"A{current_row}:D{current_row}")
+            sl = ws.cell(current_row, 1)
+            sl.value = f"Subtotal {cat_key} — OT {ot_key}"
+            sl.font  = Font(name="Arial", bold=True, size=10, color=BLANCO)
+            sl.fill  = PatternFill("solid", fgColor=cat_color)
+            sl.alignment = Alignment(horizontal="right", vertical="center")
+
+            sv = ws.cell(current_row, 5)
+            sv.value = f"=SUM(E{cat_first}:E{cat_last})"
+            sv.font  = Font(name="Arial", bold=True, size=10, color=BLANCO)
+            sv.fill  = PatternFill("solid", fgColor=cat_color)
+            sv.alignment = Alignment(horizontal="right", vertical="center")
+            sv.number_format = '"$"#,##0.00'
+            sv.border = borde
+            ws.row_dimensions[current_row].height = 18
             current_row += 1
 
-        last = current_row - 1
+        ot_last = current_row - 1
 
-        ws.merge_cells(f"A{current_row}:C{current_row}")
-        sl = ws.cell(current_row, 1)
-        sl.value = f"Subtotal OT {ot_key}"
-        sl.font = Font(name="Arial", bold=True, size=10, color=BLANCO)
-        sl.fill = PatternFill("solid", fgColor=AZUL_MED)
-        sl.alignment = Alignment(horizontal="right", vertical="center")
+        # Total por OT
+        ws.merge_cells(f"A{current_row}:D{current_row}")
+        tl = ws.cell(current_row, 1)
+        tl.value = f"TOTAL OT {ot_key}"
+        tl.font  = Font(name="Arial", bold=True, size=11, color=BLANCO)
+        tl.fill  = PatternFill("solid", fgColor=AZUL_OSC)
+        tl.alignment = Alignment(horizontal="right", vertical="center")
 
-        sv = ws.cell(current_row, 4)
-        sv.value = f"=SUM(D{first}:D{last})"
-        sv.font = Font(name="Arial", bold=True, size=10, color=BLANCO)
-        sv.fill = PatternFill("solid", fgColor=AZUL_MED)
-        sv.alignment = Alignment(horizontal="right", vertical="center")
-        sv.number_format = '"$"#,##0.00'
-        sv.border = borde
-        ws.row_dimensions[current_row].height = 18
-        current_row += 1
+        tv = ws.cell(current_row, 5)
+        tv.value = f"=SUM(E{ot_first}:E{ot_last})"
+        tv.font  = Font(name="Arial", bold=True, size=11, color=BLANCO)
+        tv.fill  = PatternFill("solid", fgColor=AZUL_OSC)
+        tv.alignment = Alignment(horizontal="right", vertical="center")
+        tv.number_format = '"$"#,##0.00'
+        tv.border = borde
+        ws.row_dimensions[current_row].height = 22
+        current_row += 2  # espacio entre OTs
 
-    ws.merge_cells(f"A{current_row}:C{current_row}")
-    tl = ws.cell(current_row, 1)
-    tl.value = "TOTAL GENERAL"
-    tl.font = Font(name="Arial", bold=True, size=11, color=BLANCO)
-    tl.fill = PatternFill("solid", fgColor=ROJO)
-    tl.alignment = Alignment(horizontal="right", vertical="center")
+    # ── Total general ─────────────────────────────────────────────────────
+    ws.merge_cells(f"A{current_row}:D{current_row}")
+    gl = ws.cell(current_row, 1)
+    gl.value = "TOTAL GENERAL"
+    gl.font  = Font(name="Arial", bold=True, size=12, color=BLANCO)
+    gl.fill  = PatternFill("solid", fgColor="C8392B")
+    gl.alignment = Alignment(horizontal="right", vertical="center")
 
-    tv = ws.cell(current_row, 4)
-    tv.value = f"=SUM(D{data_start}:D{current_row - 1})"
-    tv.font = Font(name="Arial", bold=True, size=11, color=BLANCO)
-    tv.fill = PatternFill("solid", fgColor=ROJO)
-    tv.alignment = Alignment(horizontal="right", vertical="center")
-    tv.number_format = '"$"#,##0.00'
-    tv.border = borde
-    ws.row_dimensions[current_row].height = 22
+    gv = ws.cell(current_row, 5)
+    gv.value = f"=SUM(E{data_start}:E{current_row - 1})"
+    gv.font  = Font(name="Arial", bold=True, size=12, color=BLANCO)
+    gv.fill  = PatternFill("solid", fgColor="C8392B")
+    gv.alignment = Alignment(horizontal="right", vertical="center")
+    gv.number_format = '"$"#,##0.00'
+    gv.border = borde
+    ws.row_dimensions[current_row].height = 24
 
-    ws.column_dimensions["A"].width = 16
-    ws.column_dimensions["B"].width = 42
-    ws.column_dimensions["C"].width = 14
-    ws.column_dimensions["D"].width = 16
+    # ── Anchos ────────────────────────────────────────────────────────────
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 44
+    ws.column_dimensions["D"].width = 18
+    ws.column_dimensions["E"].width = 16
     ws.freeze_panes = "A3"
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
@@ -216,17 +320,17 @@ if uploaded_files:
 
     if st.button("⚙️  Extraer y generar Excel"):
         all_rows = []
-        errores = []
+        errores  = []
         progress = st.progress(0)
 
         for i, f in enumerate(uploaded_files):
             ot = get_ot(f.name)
             try:
-                rows = extract_refacciones(f.read(), ot)
+                rows = extract_all(f.read(), ot)
                 if rows:
                     all_rows.extend(rows)
                 else:
-                    errores.append(f"⚠️ `{f.name}` — no se encontraron partidas de REFACCIONES.")
+                    errores.append(f"⚠️ `{f.name}` — no se encontraron partidas.")
             except Exception as e:
                 errores.append(f"❌ `{f.name}` — error: {e}")
             progress.progress((i + 1) / len(uploaded_files))
@@ -238,20 +342,26 @@ if uploaded_files:
             excel_bytes = build_excel(all_rows)
             total = sum(r["MONTO"] for r in all_rows)
 
+            # Resumen por categoría
+            cats = {}
+            for r in all_rows:
+                cats[r["CATEGORIA"]] = cats.get(r["CATEGORIA"], 0) + r["MONTO"]
+
             st.markdown('<div class="result-box">', unsafe_allow_html=True)
-            st.markdown(f"✅ **{len(all_rows)} partidas** extraídas de **{len(uploaded_files)} PDF(s)**")
+            st.markdown(f"✅ **{len(all_rows)} partidas** de **{len(uploaded_files)} PDF(s)**")
+            for cat, monto in cats.items():
+                st.markdown(f"&nbsp;&nbsp;&nbsp;• **{cat}**: ${monto:,.2f}")
             st.markdown(f"💰 **Total general: ${total:,.2f}**")
             st.markdown('</div>', unsafe_allow_html=True)
 
-            df = pd.DataFrame(all_rows)
-            df_show = df.copy()
+            df_show = pd.DataFrame(all_rows).copy()
             df_show["MONTO"] = df_show["MONTO"].map(lambda x: f"${x:,.2f}")
             st.dataframe(df_show, use_container_width=True, hide_index=True)
 
             out_name = (
-                f"{get_ot(uploaded_files[0].name)}_refacciones.xlsx"
+                f"{get_ot(uploaded_files[0].name)}_valuacion.xlsx"
                 if len(uploaded_files) == 1
-                else "refacciones_qualitas.xlsx"
+                else "valuacion_qualitas.xlsx"
             )
 
             st.download_button(
@@ -267,4 +377,4 @@ else:
     st.info("👆 Sube los PDFs de valuación para comenzar.")
 
 st.markdown("---")
-st.caption("Extractor Refacciones Quálitas")
+st.caption("Extractor Valuaciones Quálitas · Refacciones · Pintura · Mano de Obra")
