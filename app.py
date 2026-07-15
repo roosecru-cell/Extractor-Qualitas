@@ -77,7 +77,7 @@ def parse_lines(lines, seccion_inicial=None):
         if re.match(r'^PINTURA\b', ls): seccion = "PINTURA"; continue
         if re.match(r'^MANO DE OBRA\b', ls, re.IGNORECASE): seccion = "HOJALATERIA"; continue
         if seccion is None: continue
-        if re.search(r'DESCRIPCION|NO\. PARTE|^Subtotal|^IVA|^Total\b|No Efectivo|^UT\s|R E S U M E N|SUMA TOTAL|DEDUCIBLE|DEMÉRITO', ls, re.IGNORECASE): continue
+        if re.search(r'DESCRIPCION|NO\. PARTE|^Subtotal|^IVA|^Total\b|No Efectivo|^UT\s|R E S U M E N|SUMA TOTAL|DEDUCIBLE|DEMÉRITO|INFORME DE VALUACION|REFERENCIA|NOMBRE AFECTADO|TALLER/AGENCIA|MATRICULA|FABRICANTE|NO\. SERIE|^TIPO\b|^RIESGO\b|^MODELO\b', ls, re.IGNORECASE): continue
 
         if seccion == "REFACCIONES":
             m = pat_refac.match(ls)
@@ -98,22 +98,32 @@ def parse_lines(lines, seccion_inicial=None):
 
 def extract_all(pdf_bytes: bytes, ot: str) -> list[dict]:
     partidas = []
+    last_seccion_global = None  # se hereda entre páginas
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
+        for page_num, page in enumerate(pdf.pages):
             pw, ph = page.width, page.height
+
+            # Columna izquierda
             left_text  = page.crop((0, 0, pw * 0.50, ph)).extract_text() or ""
-            left_rows, last_seccion = parse_lines(left_text.split("\n"))
+            left_lines = left_text.split("\n")
+            tiene_enc_left = any(re.match(r'^(REFACCIONES|PINTURA|MANO DE OBRA)\b', l.strip(), re.IGNORECASE) for l in left_lines)
+            left_rows, last_seccion = parse_lines(left_lines, seccion_inicial=None if tiene_enc_left else last_seccion_global)
             partidas.extend(left_rows)
+            if last_seccion: last_seccion_global = last_seccion
+
+            # Columna derecha
             right_text  = page.crop((pw * 0.50, 0, pw, ph)).extract_text() or ""
             right_lines = right_text.split("\n")
-            tiene_encabezado = any(re.match(r'^(REFACCIONES|PINTURA|MANO DE OBRA)\b', l.strip(), re.IGNORECASE) for l in right_lines)
-            right_rows, _ = parse_lines(right_lines, seccion_inicial=None if tiene_encabezado else last_seccion)
+            tiene_enc_right = any(re.match(r'^(REFACCIONES|PINTURA|MANO DE OBRA)\b', l.strip(), re.IGNORECASE) for l in right_lines)
+            right_rows, last_sec_right = parse_lines(right_lines, seccion_inicial=None if tiene_enc_right else last_seccion_global)
             partidas.extend(right_rows)
-    seen = set(); result = []
+            if last_sec_right: last_seccion_global = last_sec_right
+    # Limpiar metadatos internos y retornar sin deduplicar
+    # (el PDF puede tener partidas idénticas legítimas, ej. Der e Izq)
+    result = []
     for p in partidas:
-        key = (p["CATEGORIA"], p["DESCRIPCION"], p["MONTO"])
-        if key not in seen:
-            seen.add(key); result.append({"OT": ot, **p})
+        clean = {k:v for k,v in p.items() if not k.startswith("_")}
+        result.append({"OT": ot, **clean})
     return result
 
 # ── Colores ────────────────────────────────────────────────────────────────────
@@ -196,9 +206,9 @@ def build_resumen(ws_res, all_rows):
 # ── Hoja Valuación (detalle) ───────────────────────────────────────────────────
 def build_excel(all_rows: list[dict]) -> bytes:
     wb = Workbook()
-    ws_res = wb.active; ws_res.title = "Resumen"
+    ws = wb.active; ws.title = "Valuación"
+    ws_res = wb.create_sheet(title="Resumen")
     build_resumen(ws_res, all_rows)
-    ws = wb.create_sheet(title="Valuación")
 
     AZUL_OSC = "1A3A5C"; AZUL_MED = "2E6DA4"; GRIS_CLARO = "F0F4F8"; BLANCO = "FFFFFF"
     thin = Side(style="thin", color="CCCCCC"); borde = Border(left=thin, right=thin, top=thin, bottom=thin)
