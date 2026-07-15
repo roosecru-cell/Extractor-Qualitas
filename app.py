@@ -223,6 +223,8 @@ def build_excel(all_rows: list[dict]) -> bytes:
         ot_list  = list(ot_group)
         ot_first = current_row
 
+        subtotal_rows_ot = []  # filas de subtotal de esta OT
+
         for cat_key, cat_group in groupby(ot_list, key=lambda r: r["CATEGORIA"]):
             cat_list  = list(cat_group)
             cat_first = current_row
@@ -273,6 +275,7 @@ def build_excel(all_rows: list[dict]) -> bytes:
             sv.number_format = '"$"#,##0.00'
             sv.border = borde
             ws.row_dimensions[current_row].height = 18
+            subtotal_rows_ot.append(current_row)
             current_row += 1
 
         ot_last = current_row - 1
@@ -285,7 +288,9 @@ def build_excel(all_rows: list[dict]) -> bytes:
         tl.alignment = Alignment(horizontal="right", vertical="center")
 
         tv = ws.cell(current_row, 5)
-        tv.value = f"=SUM(E{ot_first}:E{ot_last})"
+        # Sumar solo las filas de subtotal de cada categoría (no duplicar datos)
+        formula = "+".join(f"E{r}" for r in subtotal_rows_ot)
+        tv.value = f"={formula}"
         tv.font  = Font(name="Arial", bold=True, size=11, color=BLANCO)
         tv.fill  = PatternFill("solid", fgColor=AZUL_OSC)
         tv.alignment = Alignment(horizontal="right", vertical="center")
