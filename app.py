@@ -40,91 +40,35 @@ st.markdown("""
 st.title("🔧 Extractor de Valuaciones Quálitas")
 st.caption("Refacciones · Pintura · Hojalatería · Mecánica  |  Sube uno o varios PDFs")
 
-# ── Conceptos de Mecánica ─────────────────────────────────────────────────────
-# Cuando aparecen en Hojalatería se reclasifican como Mecánica
+# ── Palabras clave de Mecánica ────────────────────────────────────────────────
+# Si una partida de Hojalatería contiene alguna de estas palabras → Mecánica
 
-CONCEPTOS_MECANICA = {
-    "RIN DL.D.:D+M",
-    "RIN DL.I.:D+M",
-    "RIN DEL.D. REPARAR",
-    "BRAZO SUSPENS.DL.I.INF.:D+M",
-    "LLANTA DL.D.:D+M",
-    "LLANTA DL.I.:D+M",
-    "LLANTA DL.I.:D+M Y BALANCEAR",
-    "RADIADOR:D+M",
-    "RIN DEL.I. REPARAR",
-    "03 17 00 LIQUIDO REFRIG.:VAC-LLENAR",
-    "05 19 00 RIN DL.D.:D+M",
-    "38 17 70 LIQUIDO REFRIG.:VACIAR-RELLENAR",
-    "50 00 ZAX FUNCION GFS/AJUSTES",
-    "AIRE ACONDIC.:VAC-LLENAR",
-    "ALINEACION 260415174154772",
-    "ALINEACION 260505175144873",
-    "ALINEACION 260526102213567",
-    "ALINEACION Y BALANCE 260514100700748",
-    "ALINEACION Y BALANCE 260519161659496",
-    "AMORTIG.DL.D.:D+M",
-    "AMORTIG.DL.D.:DESPIEZ-ENSAMB.(DESMONT.)",
-    "AMORTIG.DL.I.:DESPIEZ-ENSAMBLAR(DESMONT)",
-    "AMORTIG.DL.I./D.:DESP-ENSAMB.(DESMONT.)",
-    "AMORTIG.DL.I.CPL.:D+M",
-    "AMORTIG.FACIA DL.:D+M",
-    "ANTICONGELANTE 260505174818878",
-    "ANTICONGELANTE 260512135935885",
-    "ARNES 260519083638683",
-    "ASIST.CAMBIO CARRIL:D+M(TRAB.ADIC.)",
-    "BALANCEO 260415174154788",
-    "BIELETA I.ESTABI.:D+M",
-    "BRAZO SUSPENS.DL.INF.:D+M (LLANTA DESM.)",
-    "CALIPER FRENO DL.I.:SOLT-FIJ.",
-    "CAMARA 360 GRADOS: AJUSTAR",
-    "CARGA DE GAS 260505174818841",
-    "CARGA DE GAS 260512135935854",
-    "CARGA GAS 260327180816370",
-    "DEPOS.EXPANSION:D+M",
-    "DES-/MONTAR FLUIDO AIRE ACONDIC.",
-    "DES+MON RIN TRA.D.",
-    "ESCANEO AIRBAG 260512135935902",
-    "FILTRO AIRE:D+M",
-    "FLECHA CARDAN DIREC.I.:D+M",
-    "FLECHA MOTRIZ DL.I.CPL.:D+M",
-    "GALON ANTICONGELANTE 260327180816379",
-    "KA) AMORTIG./MANGUETA DL.D.:SOLT-FIJ",
-    "KA) AMORTIG.DL.D.:D+M",
-    "KA) AMORTIG.DL.D./CARROCER.:SOLT.-FIJ",
-    "KA) AMORTIGUADOR/S DL.:D+M TRAB.ADIC.",
-    "KA) LLANTA/LLANTAS:D+M TRAB.ADIC.",
-    "KA) RIN DL.I.:D+M",
-    "LIQUIDO REFRIGERANTE DES+MON/SUSTITUIR",
-    "LIQUIDO REFRIGERANTE REPARAR",
-    "LLANTA DL.D.:D+M(LLANTA DESMONT.)",
-    "LLANTA DL.D.:MONTAR/BALANCEAR",
-    "LLANTA Y/O RIN(ES):D+M",
-    "PROG SENSOR RADAR 260327180816362",
-    "R RIN DEL DER 260525143507914",
-    "R RIN DEL IZQ 260511145013209",
-    "RADIADOR EGR:D+M",
-    "REC.RODAM.DL.D.:D+M",
-    "REFRIGERANTE A.ACOND REPARAR",
-    "REP ARNES SENSO REVE 260609083801049",
-    "RESONADOR INF. REPARAR",
-    "RIN TRA.D. REPARAR",
-    "ROTULA BIELETA DIREC.I.:D+M",
-    "ROTULA SOP.DL.I.:SOLT-FIJ",
-    "SENSOR BOLSA AIRE DL.:D+M",
-    "SENSOR TR.CN.ASIST.ESTAC.:D+M",
-    "SOP.D.RADIADOR:SUST.",
-    "VA) BRAZO SUSPENS.DL.D.:D+M",
-    "VA) BRAZO SUSPENS.DL.I./D.:D+M TRAB.ADIC.",
-    "VA) LLANTA DL.D.:BALANCEAR",
-    "VA) PUNTA BIELETA DIREC.:D+M TRAB.ADIC.",
-    "VA) ROTULA BIELETA DIREC.D.:D+M",
-    "VALV.PRESION DEL.I. REPARAR",
+CLAVES_MECANICA = {
+    "AIRE", "ALINEACION", "AMORTIG", "AMORTIGUADOR", "ANTICONGELANTE",
+    "ARNES", "ASIST", "BALANCEO", "BIELETA", "BRAZO", "CALIPER", "CAMARA",
+    "CARGA", "DEPOS", "DOZER", "ESCANEO", "FILTRO", "FLECHA", "FUNCION",
+    "GALON", "LIQUIDO", "LLANTA", "MONTAR", "PROG", "PUNTA", "RADIADOR",
+    "REFRIGERANTE", "REPARAR", "RESONADOR", "RIN", "RODAM", "ROTULA",
+    "SENSOR", "VALV",
 }
 
+# Claves que necesitan coincidencia exacta de palabra completa (no prefijo)
+CLAVES_PALABRA_COMPLETA = {"ROTULA"}
+
+def es_mecanica(descripcion: str) -> bool:
+    desc_upper = descripcion.upper()
+    for clave in CLAVES_MECANICA:
+        if clave in CLAVES_PALABRA_COMPLETA:
+            # Coincidencia exacta: no debe ser parte de otra palabra
+            if re.search(r'\b' + re.escape(clave) + r'\b', desc_upper):
+                return True
+        else:
+            if re.search(r'\b' + re.escape(clave), desc_upper):
+                return True
+    return False
+
 def clasificar_categoria(categoria: str, descripcion: str) -> str:
-    """Si la partida es de Hojalatería y su descripción está en la lista, → Mecánica."""
-    if categoria == "HOJALATERIA" and descripcion.strip() in CONCEPTOS_MECANICA:
+    if categoria == "HOJALATERIA" and es_mecanica(descripcion):
         return "MECANICA"
     return categoria
 
@@ -240,6 +184,7 @@ CAT_COLORS = {
     "HOJALATERIA": "2E7D32",
     "MECANICA":    "6A1B9A",
 }
+CAT_ORDER = {"REFACCIONES": 0, "PINTURA": 1, "HOJALATERIA": 2, "MECANICA": 3}
 
 def build_excel(all_rows: list[dict]) -> bytes:
     wb = Workbook()
@@ -270,8 +215,6 @@ def build_excel(all_rows: list[dict]) -> bytes:
         c.border = borde
     ws.row_dimensions[2].height = 20
 
-    # Orden de categorías en el Excel
-    CAT_ORDER = {"REFACCIONES": 0, "PINTURA": 1, "HOJALATERIA": 2, "MECANICA": 3}
     sorted_rows = sorted(all_rows, key=lambda r: (r["OT"], CAT_ORDER.get(r["CATEGORIA"], 9)))
     current_row = 3
     data_start  = 3
