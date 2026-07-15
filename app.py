@@ -227,7 +227,7 @@ def build_excel(all_rows: list[dict]) -> bytes:
     ws.row_dimensions[2].height = 20
 
     sorted_rows = sorted(all_rows, key=lambda r: (r["OT"], CAT_ORDER.get(r["CATEGORIA"], 9)))
-    current_row = 3; data_start = 3
+    current_row = 3; total_ot_rows = []
 
     for ot_key, ot_group in groupby(sorted_rows, key=lambda r: r["OT"]):
         ot_list = list(ot_group); ot_first = current_row; subtotal_rows_ot = []
@@ -262,12 +262,12 @@ def build_excel(all_rows: list[dict]) -> bytes:
         tv = ws.cell(current_row, 5); tv.value = "=" + "+".join(f"E{r}" for r in subtotal_rows_ot)
         tv.font = Font(name="Arial", bold=True, size=11, color=BLANCO); tv.fill = PatternFill("solid", fgColor=AZUL_OSC)
         tv.alignment = Alignment(horizontal="right", vertical="center"); tv.number_format = '"$"#,##0.00'; tv.border = borde
-        ws.row_dimensions[current_row].height = 22; current_row += 2
+        ws.row_dimensions[current_row].height = 22; total_ot_rows.append(current_row); current_row += 2
 
     ws.merge_cells(f"A{current_row}:D{current_row}")
     gl = ws.cell(current_row, 1); gl.value = "TOTAL GENERAL"
     gl.font = Font(name="Arial", bold=True, size=12, color=BLANCO); gl.fill = PatternFill("solid", fgColor="C8392B"); gl.alignment = Alignment(horizontal="right", vertical="center")
-    gv = ws.cell(current_row, 5); gv.value = f"=SUM(E{data_start}:E{current_row - 1})"
+    gv = ws.cell(current_row, 5); gv.value = "=" + "+".join(f"E{r}" for r in total_ot_rows)
     gv.font = Font(name="Arial", bold=True, size=12, color=BLANCO); gv.fill = PatternFill("solid", fgColor="C8392B")
     gv.alignment = Alignment(horizontal="right", vertical="center"); gv.number_format = '"$"#,##0.00'; gv.border = borde
     ws.row_dimensions[current_row].height = 24
