@@ -324,4 +324,3 @@ else:
 
 st.markdown("---")
 st.caption("Extractor Valuaciones Quálitas · Refacciones · Pintura · Hojalatería · Mecánica")
-
