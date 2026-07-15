@@ -38,7 +38,95 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🔧 Extractor de Valuaciones Quálitas")
-st.caption("Refacciones · Pintura · Mano de Obra  |  Sube uno o varios PDFs")
+st.caption("Refacciones · Pintura · Hojalatería · Mecánica  |  Sube uno o varios PDFs")
+
+# ── Conceptos de Mecánica ─────────────────────────────────────────────────────
+# Cuando aparecen en Hojalatería se reclasifican como Mecánica
+
+CONCEPTOS_MECANICA = {
+    "RIN DL.D.:D+M",
+    "RIN DL.I.:D+M",
+    "RIN DEL.D. REPARAR",
+    "BRAZO SUSPENS.DL.I.INF.:D+M",
+    "LLANTA DL.D.:D+M",
+    "LLANTA DL.I.:D+M",
+    "LLANTA DL.I.:D+M Y BALANCEAR",
+    "RADIADOR:D+M",
+    "RIN DEL.I. REPARAR",
+    "03 17 00 LIQUIDO REFRIG.:VAC-LLENAR",
+    "05 19 00 RIN DL.D.:D+M",
+    "38 17 70 LIQUIDO REFRIG.:VACIAR-RELLENAR",
+    "50 00 ZAX FUNCION GFS/AJUSTES",
+    "AIRE ACONDIC.:VAC-LLENAR",
+    "ALINEACION 260415174154772",
+    "ALINEACION 260505175144873",
+    "ALINEACION 260526102213567",
+    "ALINEACION Y BALANCE 260514100700748",
+    "ALINEACION Y BALANCE 260519161659496",
+    "AMORTIG.DL.D.:D+M",
+    "AMORTIG.DL.D.:DESPIEZ-ENSAMB.(DESMONT.)",
+    "AMORTIG.DL.I.:DESPIEZ-ENSAMBLAR(DESMONT)",
+    "AMORTIG.DL.I./D.:DESP-ENSAMB.(DESMONT.)",
+    "AMORTIG.DL.I.CPL.:D+M",
+    "AMORTIG.FACIA DL.:D+M",
+    "ANTICONGELANTE 260505174818878",
+    "ANTICONGELANTE 260512135935885",
+    "ARNES 260519083638683",
+    "ASIST.CAMBIO CARRIL:D+M(TRAB.ADIC.)",
+    "BALANCEO 260415174154788",
+    "BIELETA I.ESTABI.:D+M",
+    "BRAZO SUSPENS.DL.INF.:D+M (LLANTA DESM.)",
+    "CALIPER FRENO DL.I.:SOLT-FIJ.",
+    "CAMARA 360 GRADOS: AJUSTAR",
+    "CARGA DE GAS 260505174818841",
+    "CARGA DE GAS 260512135935854",
+    "CARGA GAS 260327180816370",
+    "DEPOS.EXPANSION:D+M",
+    "DES-/MONTAR FLUIDO AIRE ACONDIC.",
+    "DES+MON RIN TRA.D.",
+    "ESCANEO AIRBAG 260512135935902",
+    "FILTRO AIRE:D+M",
+    "FLECHA CARDAN DIREC.I.:D+M",
+    "FLECHA MOTRIZ DL.I.CPL.:D+M",
+    "GALON ANTICONGELANTE 260327180816379",
+    "KA) AMORTIG./MANGUETA DL.D.:SOLT-FIJ",
+    "KA) AMORTIG.DL.D.:D+M",
+    "KA) AMORTIG.DL.D./CARROCER.:SOLT.-FIJ",
+    "KA) AMORTIGUADOR/S DL.:D+M TRAB.ADIC.",
+    "KA) LLANTA/LLANTAS:D+M TRAB.ADIC.",
+    "KA) RIN DL.I.:D+M",
+    "LIQUIDO REFRIGERANTE DES+MON/SUSTITUIR",
+    "LIQUIDO REFRIGERANTE REPARAR",
+    "LLANTA DL.D.:D+M(LLANTA DESMONT.)",
+    "LLANTA DL.D.:MONTAR/BALANCEAR",
+    "LLANTA Y/O RIN(ES):D+M",
+    "PROG SENSOR RADAR 260327180816362",
+    "R RIN DEL DER 260525143507914",
+    "R RIN DEL IZQ 260511145013209",
+    "RADIADOR EGR:D+M",
+    "REC.RODAM.DL.D.:D+M",
+    "REFRIGERANTE A.ACOND REPARAR",
+    "REP ARNES SENSO REVE 260609083801049",
+    "RESONADOR INF. REPARAR",
+    "RIN TRA.D. REPARAR",
+    "ROTULA BIELETA DIREC.I.:D+M",
+    "ROTULA SOP.DL.I.:SOLT-FIJ",
+    "SENSOR BOLSA AIRE DL.:D+M",
+    "SENSOR TR.CN.ASIST.ESTAC.:D+M",
+    "SOP.D.RADIADOR:SUST.",
+    "VA) BRAZO SUSPENS.DL.D.:D+M",
+    "VA) BRAZO SUSPENS.DL.I./D.:D+M TRAB.ADIC.",
+    "VA) LLANTA DL.D.:BALANCEAR",
+    "VA) PUNTA BIELETA DIREC.:D+M TRAB.ADIC.",
+    "VA) ROTULA BIELETA DIREC.D.:D+M",
+    "VALV.PRESION DEL.I. REPARAR",
+}
+
+def clasificar_categoria(categoria: str, descripcion: str) -> str:
+    """Si la partida es de Hojalatería y su descripción está en la lista, → Mecánica."""
+    if categoria == "HOJALATERIA" and descripcion.strip() in CONCEPTOS_MECANICA:
+        return "MECANICA"
+    return categoria
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -49,24 +137,18 @@ def es_no_parte_refaccion(token: str) -> bool:
     return not re.match(r'^\d+\.\d+$', token)
 
 def parse_lines(lines, seccion_inicial=None):
-    """
-    Parsea líneas de texto y retorna partidas.
-    seccion_inicial: si la columna no tiene encabezado de sección,
-                     usa este valor como sección por defecto.
-    """
     pat_refac = re.compile(r'^(.+?)\s+(\S+)\s+\$\s*([\d,]+\.\d{2})\s*$')
     pat_ut    = re.compile(r'^(.+?)\s+(\d+\.\d+)\s+\$\s*([\d,]+\.\d{2})\s*$')
     pat_tpp   = re.compile(r'^(.+?)\s+TPP\s+(\d+\.\d+)\s+\$\s*([\d,]+\.\d{2})\s*$')
 
     partidas = []
-    seccion = seccion_inicial
+    seccion  = seccion_inicial
 
     for line in lines:
         ls = line.strip()
         if not ls:
             continue
 
-        # Detectar encabezados de sección
         if re.match(r'^REFACCIONES\b', ls):
             seccion = "REFACCIONES"; continue
         if re.match(r'^PINTURA\b', ls):
@@ -77,7 +159,6 @@ def parse_lines(lines, seccion_inicial=None):
         if seccion is None:
             continue
 
-        # Saltar líneas de totales/encabezados
         if re.search(
             r'DESCRIPCION|NO\. PARTE|^Subtotal|^IVA|^Total\b|No Efectivo|^UT\s|R E S U M E N|SUMA TOTAL|DEDUCIBLE|DEMÉRITO',
             ls, re.IGNORECASE
@@ -87,70 +168,59 @@ def parse_lines(lines, seccion_inicial=None):
         if seccion == "REFACCIONES":
             m = pat_refac.match(ls)
             if m and es_no_parte_refaccion(m.group(2)):
+                desc = m.group(1).strip()
                 partidas.append({
-                    "CATEGORIA": "REFACCIONES",
-                    "DESCRIPCION": m.group(1).strip(),
+                    "CATEGORIA":      clasificar_categoria("REFACCIONES", desc),
+                    "DESCRIPCION":    desc,
                     "NO. PARTE / UT": m.group(2),
-                    "MONTO": float(m.group(3).replace(",", "")),
+                    "MONTO":          float(m.group(3).replace(",", "")),
                 })
         else:
-            # TPP especial
             m = pat_tpp.match(ls)
             if m:
+                desc = m.group(1).strip()
                 partidas.append({
-                    "CATEGORIA": seccion,
-                    "DESCRIPCION": m.group(1).strip(),
+                    "CATEGORIA":      clasificar_categoria(seccion, desc),
+                    "DESCRIPCION":    desc,
                     "NO. PARTE / UT": m.group(2),
-                    "MONTO": float(m.group(3).replace(",", "")),
+                    "MONTO":          float(m.group(3).replace(",", "")),
                 })
                 continue
             m = pat_ut.match(ls)
             if m:
+                desc = m.group(1).strip()
                 partidas.append({
-                    "CATEGORIA": seccion,
-                    "DESCRIPCION": m.group(1).strip(),
+                    "CATEGORIA":      clasificar_categoria(seccion, desc),
+                    "DESCRIPCION":    desc,
                     "NO. PARTE / UT": m.group(2),
-                    "MONTO": float(m.group(3).replace(",", "")),
+                    "MONTO":          float(m.group(3).replace(",", "")),
                 })
 
     return partidas, seccion
 
 
 def extract_all(pdf_bytes: bytes, ot: str) -> list[dict]:
-    """
-    Extrae las tres secciones del PDF manejando el layout de dos columnas.
-    - Columna izquierda: contiene los encabezados de sección y sus datos
-    - Columna derecha: puede contener continuación de la última sección
-      (sin repetir el encabezado)
-    """
     partidas = []
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for page in pdf.pages:
             pw, ph = page.width, page.height
 
-            # ── Columna izquierda ─────────────────────────────────────────
             left_text  = page.crop((0, 0, pw * 0.50, ph)).extract_text() or ""
             left_rows, last_seccion = parse_lines(left_text.split("\n"))
             partidas.extend(left_rows)
 
-            # ── Columna derecha ───────────────────────────────────────────
-            # Puede tener su propio encabezado de sección o ser continuación
-            right_text = page.crop((pw * 0.50, 0, pw, ph)).extract_text() or ""
+            right_text  = page.crop((pw * 0.50, 0, pw, ph)).extract_text() or ""
             right_lines = right_text.split("\n")
 
-            # Ver si la columna derecha tiene un encabezado de sección propio
             tiene_encabezado = any(
                 re.match(r'^(REFACCIONES|PINTURA|MANO DE OBRA)\b', l.strip(), re.IGNORECASE)
                 for l in right_lines
             )
-
-            # Si no tiene encabezado propio, heredar la última sección activa
             seccion_der = None if tiene_encabezado else last_seccion
             right_rows, _ = parse_lines(right_lines, seccion_inicial=seccion_der)
             partidas.extend(right_rows)
 
-    # Agregar OT y deduplicar (en caso de overlap en el crop)
     seen = set()
     result = []
     for p in partidas:
@@ -167,7 +237,8 @@ def extract_all(pdf_bytes: bytes, ot: str) -> list[dict]:
 CAT_COLORS = {
     "REFACCIONES": "1A3A5C",
     "PINTURA":     "C8392B",
-    "HOJALATERIA":"2E7D32",
+    "HOJALATERIA": "2E7D32",
+    "MECANICA":    "6A1B9A",
 }
 
 def build_excel(all_rows: list[dict]) -> bytes:
@@ -183,16 +254,14 @@ def build_excel(all_rows: list[dict]) -> bytes:
     thin  = Side(style="thin", color="CCCCCC")
     borde = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    # Título
     ws.merge_cells("A1:E1")
     c = ws["A1"]
-    c.value = "VALUACIÓN QUÁLITAS – REFACCIONES / PINTURA / HOJALATERIA"
+    c.value = "VALUACIÓN QUÁLITAS – REFACCIONES / PINTURA / HOJALATERÍA / MECÁNICA"
     c.font = Font(name="Arial", bold=True, size=13, color=BLANCO)
     c.fill = PatternFill("solid", fgColor=AZUL_OSC)
     c.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    # Cabeceras
     for col, hdr in enumerate(["OT", "CATEGORÍA", "DESCRIPCIÓN", "NO. PARTE / UT", "MONTO"], 1):
         c = ws.cell(2, col, hdr)
         c.font = Font(name="Arial", bold=True, size=10, color=BLANCO)
@@ -201,7 +270,9 @@ def build_excel(all_rows: list[dict]) -> bytes:
         c.border = borde
     ws.row_dimensions[2].height = 20
 
-    sorted_rows = sorted(all_rows, key=lambda r: (r["OT"], r["CATEGORIA"]))
+    # Orden de categorías en el Excel
+    CAT_ORDER = {"REFACCIONES": 0, "PINTURA": 1, "HOJALATERIA": 2, "MECANICA": 3}
+    sorted_rows = sorted(all_rows, key=lambda r: (r["OT"], CAT_ORDER.get(r["CATEGORIA"], 9)))
     current_row = 3
     data_start  = 3
 
@@ -244,7 +315,6 @@ def build_excel(all_rows: list[dict]) -> bytes:
 
             cat_last = current_row - 1
 
-            # Subtotal categoría
             ws.merge_cells(f"A{current_row}:D{current_row}")
             sl = ws.cell(current_row, 1)
             sl.value = f"Subtotal {cat_key} — OT {ot_key}"
@@ -264,7 +334,6 @@ def build_excel(all_rows: list[dict]) -> bytes:
 
         ot_last = current_row - 1
 
-        # Total OT
         ws.merge_cells(f"A{current_row}:D{current_row}")
         tl = ws.cell(current_row, 1)
         tl.value = f"TOTAL OT {ot_key}"
@@ -282,7 +351,6 @@ def build_excel(all_rows: list[dict]) -> bytes:
         ws.row_dimensions[current_row].height = 22
         current_row += 2
 
-    # Total general
     ws.merge_cells(f"A{current_row}:D{current_row}")
     gl = ws.cell(current_row, 1)
     gl.value = "TOTAL GENERAL"
@@ -355,8 +423,9 @@ if uploaded_files:
 
             st.markdown('<div class="result-box">', unsafe_allow_html=True)
             st.markdown(f"✅ **{len(all_rows)} partidas** de **{len(uploaded_files)} PDF(s)**")
-            for cat, monto in cats.items():
-                st.markdown(f"&nbsp;&nbsp;&nbsp;• **{cat}**: ${monto:,.2f}")
+            for cat in ["REFACCIONES", "PINTURA", "HOJALATERIA", "MECANICA"]:
+                if cat in cats:
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;• **{cat}**: ${cats[cat]:,.2f}")
             st.markdown(f"💰 **Total general: ${total:,.2f}**")
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -383,4 +452,4 @@ else:
     st.info("👆 Sube los PDFs de valuación para comenzar.")
 
 st.markdown("---")
-st.caption("Extractor Valuaciones Quálitas · Refacciones · Pintura · Mano de Obra")
+st.caption("Extractor Valuaciones Quálitas · Refacciones · Pintura · Hojalatería · Mecánica")
